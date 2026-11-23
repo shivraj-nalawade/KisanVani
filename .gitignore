@@ -1,0 +1,16 @@
+# Virtual Environment
+venv/
+__pycache__/
+*.pyc
+
+# Secret API Keys
+.env
+
+# Large/Temporary Data
+data/temp_audio/
+data/vector_db/
+data/documents/
+
+# Ignore ngrok executables if you downloaded them directly
+ngrok.exe
+ngrok.zip
