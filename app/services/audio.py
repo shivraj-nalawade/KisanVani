@@ -4,6 +4,9 @@ from pydub import AudioSegment
 from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
 
+
+os.makedirs("data/temp_audio", exist_ok=True)
+
 load_dotenv()
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
