@@ -8,6 +8,6 @@ gTTS==2.5.4
 pydub==0.25.1
 pymupdf==2.1
 scikit-learn==1.9.1
-numpy==2.5.5
+numpy
 streamlit==1.67.0
 requests==2.34.2
