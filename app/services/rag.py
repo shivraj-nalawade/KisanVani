@@ -1,30 +1,26 @@
 import os
 import fitz  # PyMuPDF
-import faiss
-import numpy as np
 import pickle
 from groq import Groq
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 load_dotenv()
 
-print("Loading Multilingual Embedding Model... (Will download on first run)")
-embedder = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"), timeout=10.0)
 
 DOCS_DIR = "data/documents"
 DB_DIR = "data/vector_db"
-INDEX_FILE = f"{DB_DIR}/faiss_index.bin"
-CHUNKS_FILE = f"{DB_DIR}/chunks.pkl"
+INDEX_FILE = f"{DB_DIR}/tfidf_index.pkl"
+
 
 def build_vector_db():
-    """Reads PDFs, creates overlapping embeddings, and saves the FAISS index."""
+    """Reads PDFs, creates overlapping chunks, and saves the TF-IDF search index."""
     print("Building Knowledge Base...")
     os.makedirs(DB_DIR, exist_ok=True)
     chunks = []
-    
-    # 1. Read all PDFs in the documents folder
+
     for filename in os.listdir(DOCS_DIR):
         if filename.endswith(".pdf"):
             filepath = os.path.join(DOCS_DIR, filename)
@@ -32,8 +28,7 @@ def build_vector_db():
             text = ""
             for page in doc:
                 text += page.get_text("text") + "\n"
-            
-            # 2. Overlapping chunking (150 words per chunk, 30-word overlap)
+
             words = text.split()
             chunk_size = 150
             overlap = 30
@@ -46,24 +41,18 @@ def build_vector_db():
         print("No PDFs found in data/documents/")
         return False
 
-    # 3. Create embeddings
-    print(f"Embedding {len(chunks)} chunks...")
-    embeddings = embedder.encode(chunks, convert_to_numpy=True)
+    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
+    matrix = vectorizer.fit_transform(chunks)
 
-    # 4. Build and save FAISS index
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(embeddings)
+    with open(INDEX_FILE, "wb") as f:
+        pickle.dump({"vectorizer": vectorizer, "matrix": matrix, "chunks": chunks}, f)
 
-    faiss.write_index(index, INDEX_FILE)
-    with open(CHUNKS_FILE, "wb") as f:
-        pickle.dump(chunks, f)
-        
-    print("Knowledge Base built successfully!")
+    print(f"Knowledge Base built successfully with {len(chunks)} chunks!")
     return True
 
+
 def _translate_query_for_search(query: str) -> str:
-    """Normalizes and translates non-English ASR queries into clean English for FAISS search."""
+    """Normalizes and translates non-English ASR queries into clean English for search."""
     if query.isascii():
         return query
 
@@ -76,7 +65,7 @@ def _translate_query_for_search(query: str) -> str:
                     "content": (
                         "You translate Indian speech-to-text queries into English for searching Indian agricultural PDFs. "
                         "ASR often splits compound words with extra spaces or slight phonetic typos—mentally rejoin split "
-                        "syllables before translating. Use standard Indian agricultural terminology (never Western/American terms). "
+                        "syllables before translating. Use standard Indian agricultural terminology. "
                         "Output the clean English question followed by 3-5 key English search terms on the same line."
                     )
                 },
@@ -96,32 +85,28 @@ def _translate_query_for_search(query: str) -> str:
 
     return query
 
+
 def search_knowledge_base(query: str, top_k: int = 5) -> str:
     """Searches the database for the most relevant document chunks."""
     if not os.path.exists(INDEX_FILE):
         build_vector_db()
 
-    index = faiss.read_index(INDEX_FILE)
-    with open(CHUNKS_FILE, "rb") as f:
-        chunks = pickle.load(f)
+    with open(INDEX_FILE, "rb") as f:
+        data = pickle.load(f)
 
-    # Normalize Indic queries into English for accurate matching against English PDFs
+    vectorizer = data["vectorizer"]
+    matrix = data["matrix"]
+    chunks = data["chunks"]
+
     search_query = _translate_query_for_search(query)
+    query_vec = vectorizer.transform([search_query])
+    scores = cosine_similarity(query_vec, matrix).flatten()
 
-    # Embed the search query
-    query_vector = embedder.encode([search_query], convert_to_numpy=True)
-    
-    # Search FAISS
-    distances, indices = index.search(query_vector, top_k)
-    
-    # Compile the retrieved evidence
-    evidence = []
-    for idx in indices[0]:
-        if 0 <= idx < len(chunks):
-            evidence.append(chunks[idx])
-            
+    top_indices = scores.argsort()[::-1][:top_k]
+    evidence = [chunks[idx] for idx in top_indices if scores[idx] > 0.01]
+
     return "\n\n".join(evidence)
 
-# Auto-build on startup if missing
+
 if not os.path.exists(INDEX_FILE) and os.path.exists(DOCS_DIR) and os.listdir(DOCS_DIR):
     build_vector_db()
